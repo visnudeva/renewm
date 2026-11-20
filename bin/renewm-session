@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# Ly / display-manager entry. Absolute-path friendly; sets PATH for pip --user.
-set -euo pipefail
+# Ly / display-manager entry for renewm.
+# Preflight imports, keep a log, and pause on failure so the VT shows the error
+# (Ly otherwise snaps back to the login screen with no message).
+set -uo pipefail
 
 export PATH="${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-newm}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-newm}"
 
 REPO="${RENEWM_DIR:-${HOME}/code/GITHUB/renewm}"
 export RENEWM_DIR="$REPO"
 LOG="${HOME}/.cache/newm_log"
-mkdir -p "$(dirname "$LOG")"
+LY_LOG="${HOME}/.local/state/ly-session.log"
+mkdir -p "$(dirname "$LOG")" "$(dirname "$LY_LOG")"
 
 if [[ -d "${REPO}/newm" ]]; then
   export PYTHONPATH="${REPO}${PYTHONPATH:+:$PYTHONPATH}"
@@ -16,19 +22,74 @@ if [[ -d "${REPO}/../repywm/pywm" ]]; then
   export PYTHONPATH="$(cd "${REPO}/../repywm" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
-if [[ -x "${HOME}/.local/bin/start-newm" ]]; then
-  exec "${HOME}/.local/bin/start-newm" "$@"
-fi
-if [[ -x "${REPO}/bin/start-newm" ]]; then
-  exec "${REPO}/bin/start-newm" "$@"
-fi
+fail() {
+  {
+    echo
+    echo "======== renewm failed ========"
+    echo "$*"
+    echo "Log: $LOG"
+    echo "Also: $LY_LOG"
+    echo "==============================="
+    echo
+  } | tee -a "$LOG" >&2
+  # Stay on the VT long enough to read (Ly returns to the greeter after exit).
+  sleep 12
+  exit 1
+}
 
 {
-  echo "renewm-session: start-newm not found"
-  echo "  looked for: ${HOME}/.local/bin/start-newm"
-  echo "  looked for: ${REPO}/bin/start-newm"
-  echo "  fix: cd ${REPO} && ./install.sh"
-} >"$LOG" 2>&1
-# Also surface on the Ly-visible console if any
-echo "renewm-session: start-newm not found — see ${LOG}" >&2
-exit 127
+  echo "---- renewm-session $(date -Iseconds) ----"
+  echo "USER=$USER HOME=$HOME REPO=$REPO"
+  echo "PATH=$PATH"
+  echo "PYTHONPATH=${PYTHONPATH:-}"
+  command -v start-newm || true
+  command -v python3 || true
+  ls -l /usr/local/bin/renewm-session "${HOME}/.local/bin/start-newm" 2>&1 || true
+} >>"$LOG" 2>&1
+
+START=""
+if [[ -x "${HOME}/.local/bin/start-newm" ]]; then
+  START="${HOME}/.local/bin/start-newm"
+elif [[ -x "${REPO}/bin/start-newm" ]]; then
+  START="${REPO}/bin/start-newm"
+else
+  fail "start-newm not found. Run: cd ${REPO} && ./install.sh"
+fi
+
+# Prove the Python stack is importable before replacing the process.
+if ! python3 - <<'PY' >>"$LOG" 2>&1
+import sys
+print("python", sys.version)
+try:
+    import pywm
+    print("pywm", getattr(pywm, "__file__", pywm))
+except Exception as e:
+    print("IMPORT pywm FAILED:", e)
+    sys.exit(2)
+try:
+    import newm
+    print("newm", getattr(newm, "__file__", newm))
+except Exception as e:
+    print("IMPORT newm FAILED:", e)
+    sys.exit(3)
+print("imports OK")
+PY
+then
+  fail "Python import failed (pywm/newm). Last log lines:
+$(tail -n 40 "$LOG")
+
+Fix: cd ${REPO} && ./install.sh
+Then: python3 -c 'import newm, pywm; print(\"ok\")'"
+fi
+
+# Run with debug; tee so Ly's session_log and our cache both see output.
+set +e
+"$START" -d "$@" 2>&1 | tee -a "$LOG"
+rc=${PIPESTATUS[0]}
+set -e
+
+if [[ "$rc" -ne 0 ]]; then
+  fail "start-newm exited ${rc}. Last log lines:
+$(tail -n 60 "$LOG")"
+fi
+exit "$rc"
