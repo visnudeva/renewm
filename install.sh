@@ -17,6 +17,11 @@ SESSION_NAME="renewm"
 SESSION_DIR_LY="/etc/ly/wayland-sessions"
 SESSION_DIR_USER="${HOME}/.local/share/wayland-sessions"
 LOCAL_BIN="${HOME}/.local/bin"
+# Dedicated venv (PEP 668 / SweetPotatOs). --system-site-packages reuses
+# pacman python-cairo/numpy/etc so we do not rebuild them with mesonpy.
+VENV_DIR="${RENEWM_VENV:-${HOME}/.local/share/renewm-venv}"
+VENV_PY="${VENV_DIR}/bin/python"
+VENV_PIP="${VENV_DIR}/bin/pip"
 # Match SweetPotatOs: Ly's setup.sh exec's the desktop Exec= with a minimal PATH
 # (no ~/.local/bin). Swirl uses /usr/local/bin/sweetpotatos-session — we do the same.
 SYSTEM_BIN="/usr/local/bin"
@@ -96,42 +101,44 @@ install_arch_deps() {
   if ((${#pkgs[@]})); then
     sudo_run pacman -S --needed --noconfirm "${pkgs[@]}"
   fi
-  info "Installing Python deps via pip (pyfiglet, thefuzz, pam, dasbus, …)…"
-  pip_user -q pyfiglet thefuzz python-pam dasbus pycairo psutil evdev imageio numpy || \
-    pip_user pyfiglet thefuzz python-pam dasbus pycairo psutil
-  ok "System + Python deps ready"
+  ensure_venv
+  info "Installing Python deps into venv (pyfiglet, thefuzz, …)…"
+  # Prefer pacman packages via --system-site-packages; only pip what is missing.
+  pip_venv pyfiglet thefuzz 2>/dev/null || pip_venv pyfiglet thefuzz
+  # Optional extras if not provided by pacman site-packages
+  pip_venv python-pam dasbus 2>/dev/null || true
+  ok "System + venv Python deps ready"
 }
 
-pip_user() {
-  # Never pass --break-system-packages: SweetPotatOs pip rejects it.
-  # Use --no-build-isolation so system meson/setuptools are visible.
-  # If the distro marks stdlib as externally managed, fall back to a venv.
-  local out rc
-  set +e
-  out="$(python3 -m pip install --user --no-build-isolation "$@" 2>&1)"
-  rc=$?
-  set -e
-  if [[ "$rc" -eq 0 ]]; then
-    printf '%s\n' "$out"
-    return 0
+ensure_venv() {
+  # Recreate if missing or created without system-site-packages (pycairo etc.).
+  local need_new=0
+  if [[ ! -x "$VENV_PY" ]]; then
+    need_new=1
+  elif ! "$VENV_PY" -c 'import sys; sys.exit(0 if hasattr(sys, "base_prefix") else 1)' 2>/dev/null; then
+    need_new=1
+  elif ! "$VENV_PY" -c 'import cairo, numpy' 2>/dev/null; then
+    warn "venv cannot import system cairo/numpy — recreating with --system-site-packages"
+    need_new=1
   fi
-  printf '%s\n' "$out" >&2
-  if printf '%s' "$out" | grep -qE 'externally-managed-environment|No module named pip'; then
-    local venv="${HOME}/.local/share/renewm-venv"
-    info "PEP 668 / no user site — using venv at ${venv}"
-    if [[ ! -x "${venv}/bin/python" ]]; then
-      python3 -m venv "$venv"
-    fi
-    # shellcheck disable=SC1091
-    source "${venv}/bin/activate"
-    python -m pip install -U pip setuptools wheel
-    python -m pip install --no-build-isolation "$@"
-    # Ensure venv binaries are preferred
-    mkdir -p "$LOCAL_BIN"
-    ln -sfn "${venv}/bin/python" "${LOCAL_BIN}/renewm-python"
-    return 0
+  if [[ "$need_new" -eq 1 ]]; then
+    info "Creating venv with system site-packages at ${VENV_DIR}"
+    rm -rf "$VENV_DIR"
+    mkdir -p "$(dirname "$VENV_DIR")"
+    /usr/bin/python3 -m venv --system-site-packages "$VENV_DIR"
+    "$VENV_PIP" install -U pip setuptools wheel
+  else
+    info "Using venv ${VENV_DIR}"
   fi
-  return "$rc"
+  mkdir -p "$LOCAL_BIN"
+  ln -sfn "$VENV_PY" "${LOCAL_BIN}/renewm-python"
+  ok "venv ready"
+}
+
+pip_venv() {
+  ensure_venv
+  # No --user inside a venv. No build isolation so editable setup.py sees the tree.
+  "$VENV_PIP" install --no-build-isolation "$@"
 }
 
 ensure_path_hint() {
@@ -188,14 +195,22 @@ ensure_repywm_submodules() {
 
 build_repywm_native() {
   local dir="$1"
+  if [[ -f "${dir}/pywm/_pywm.so" && "${REPYWM_FORCE_NATIVE:-}" != "1" ]]; then
+    info "Reusing existing ${dir}/pywm/_pywm.so (set REPYWM_FORCE_NATIVE=1 to rebuild)"
+    return 0
+  fi
   info "Building native _pywm.so with system meson (a few minutes)…"
+  # Ensure meson finds the real interpreter, not a half-activated venv python
+  # with missing headers — prefer system python3 for the native extension.
+  local pybin
+  pybin="$(command -v /usr/bin/python3 || command -v python3)"
   if [[ -x "${dir}/build-native.sh" ]]; then
-    bash "${dir}/build-native.sh"
+    PATH="$(dirname "$pybin"):$PATH" bash "${dir}/build-native.sh"
   else
     rm -rf "${dir}/build"
     (
       cd "$dir"
-      meson setup build -Dwlroots:examples=false -Dwlroots:werror=false
+      PATH="$(dirname "$pybin"):$PATH" meson setup build -Dwlroots:examples=false -Dwlroots:werror=false
       ninja -C build
       cp -f build/_pywm*.so pywm/_pywm.so
     )
@@ -215,22 +230,22 @@ install_pywm() {
   fi
   ensure_repywm_submodules "$REPYWM_DIR"
   build_repywm_native "$REPYWM_DIR"
-  info "Installing repywm Python package (editable, no build isolation)…"
-  # setup.py skips meson when _pywm.so already exists
-  REPYWM_SKIP_NATIVE=1 pip_user -e "${REPYWM_DIR}"
-  ok "repywm installed from local checkout"
-  python3 -c 'import pywm; print("pywm OK", pywm.__file__)' || {
+  ensure_venv
+  info "Installing repywm into venv (editable)…"
+  REPYWM_SKIP_NATIVE=1 pip_venv -e "${REPYWM_DIR}"
+  ok "repywm installed into ${VENV_DIR}"
+  "$VENV_PY" -c 'import pywm; print("pywm OK", pywm.__file__)' || {
     warn "pywm import failed after install"
     return 1
   }
 }
 
 install_renewm() {
-  info "Installing renewm (editable) from ${SCRIPT_DIR}…"
-  pip_user -e "${SCRIPT_DIR}"
-  # Re-copy launchers: pip -e may overwrite start-newm with a weaker stub
+  ensure_venv
+  info "Installing renewm into venv (editable)…"
+  pip_venv -e "${SCRIPT_DIR}"
   install_launchers
-  python3 -c 'import newm, pywm; print("renewm+pywm OK")' || {
+  "$VENV_PY" -c 'import newm, pywm; print("renewm+pywm OK")' || {
     warn "newm/pywm import check failed"
     return 1
   }

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Launch renewm / newm. Does not rely on a sibling ".start-newm".
-# Stdout/stderr stay on the terminal (renewm-session tees them to the log).
+# Launch renewm via the dedicated venv (PEP 668) or system python + PYTHONPATH.
 set -euo pipefail
 
 SOURCE=${BASH_SOURCE[0]}
@@ -19,6 +18,13 @@ if [[ -z "$REPO_ROOT" && -d "${HOME}/code/GITHUB/renewm/newm" ]]; then
   REPO_ROOT="${HOME}/code/GITHUB/renewm"
 fi
 
+VENV_PY="${RENEWM_VENV_PYTHON:-${HOME}/.local/share/renewm-venv/bin/python}"
+if [[ -x "$VENV_PY" ]]; then
+  PY="$VENV_PY"
+else
+  PY="$(command -v python3)"
+fi
+
 if [[ -n "$REPO_ROOT" ]]; then
   export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
   if [[ -d "$REPO_ROOT/../repywm/pywm" ]]; then
@@ -26,10 +32,9 @@ if [[ -n "$REPO_ROOT" ]]; then
   fi
 fi
 
-echo "renewm: dir=$DIR repo=${REPO_ROOT:-?} args=$*" >&2
+echo "renewm: python=$PY repo=${REPO_ROOT:-?} args=$*" >&2
 
-run_py() {
-  exec python3 - "$@" <<'PY'
+exec "$PY" - "$@" <<'PY'
 import argparse
 import sys
 
@@ -50,11 +55,3 @@ args = parser.parse_args()
 print("renewm python args:", sys.argv, flush=True)
 run(args.debug, args.profile, args.config_file)
 PY
-}
-
-# Prefer in-tree helper only when it lives next to a real checkout.
-if [[ -n "$REPO_ROOT" && -x "$REPO_ROOT/bin/.start-newm" ]]; then
-  exec "$REPO_ROOT/bin/.start-newm" "$@"
-fi
-
-run_py "$@"

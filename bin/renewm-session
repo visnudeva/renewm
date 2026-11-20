@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Ly / display-manager entry for renewm.
-# Preflight imports, keep a log, and pause on failure so the VT shows the error
-# (Ly otherwise snaps back to the login screen with no message).
+# Ly entry for renewm — uses renewm-venv and shows errors on the VT.
 set -uo pipefail
 
 export PATH="${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
@@ -11,9 +9,10 @@ export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-newm}"
 
 REPO="${RENEWM_DIR:-${HOME}/code/GITHUB/renewm}"
 export RENEWM_DIR="$REPO"
+VENV_PY="${HOME}/.local/share/renewm-venv/bin/python"
+export RENEWM_VENV_PYTHON="$VENV_PY"
 LOG="${HOME}/.cache/newm_log"
-LY_LOG="${HOME}/.local/state/ly-session.log"
-mkdir -p "$(dirname "$LOG")" "$(dirname "$LY_LOG")"
+mkdir -p "$(dirname "$LOG")"
 
 if [[ -d "${REPO}/newm" ]]; then
   export PYTHONPATH="${REPO}${PYTHONPATH:+:$PYTHONPATH}"
@@ -28,23 +27,18 @@ fail() {
     echo "======== renewm failed ========"
     echo "$*"
     echo "Log: $LOG"
-    echo "Also: $LY_LOG"
     echo "==============================="
     echo
   } | tee -a "$LOG" >&2
-  # Stay on the VT long enough to read (Ly returns to the greeter after exit).
   sleep 12
   exit 1
 }
 
 {
   echo "---- renewm-session $(date -Iseconds) ----"
-  echo "USER=$USER HOME=$HOME REPO=$REPO"
-  echo "PATH=$PATH"
-  echo "PYTHONPATH=${PYTHONPATH:-}"
-  command -v start-newm || true
-  command -v python3 || true
-  ls -l /usr/local/bin/renewm-session "${HOME}/.local/bin/start-newm" 2>&1 || true
+  echo "USER=$USER REPO=$REPO VENV_PY=$VENV_PY"
+  ls -l "$VENV_PY" "${HOME}/.local/bin/start-newm" 2>&1 || true
+  ls -l "${REPO}/../repywm/pywm/_pywm.so" 2>&1 || true
 } >>"$LOG" 2>&1
 
 START=""
@@ -56,33 +50,26 @@ else
   fail "start-newm not found. Run: cd ${REPO} && ./install.sh"
 fi
 
-# Prove the Python stack is importable before replacing the process.
-if ! python3 - <<'PY' >>"$LOG" 2>&1
+PY="${VENV_PY}"
+[[ -x "$PY" ]] || PY="$(command -v python3)"
+
+if ! "$PY" - <<'PY' >>"$LOG" 2>&1
 import sys
-print("python", sys.version)
-try:
-    import pywm
-    print("pywm", getattr(pywm, "__file__", pywm))
-except Exception as e:
-    print("IMPORT pywm FAILED:", e)
-    sys.exit(2)
-try:
-    import newm
-    print("newm", getattr(newm, "__file__", newm))
-except Exception as e:
-    print("IMPORT newm FAILED:", e)
-    sys.exit(3)
+print("python", sys.version, sys.executable)
+import pywm
+print("pywm", pywm.__file__)
+import newm
+print("newm", newm.__file__)
 print("imports OK")
 PY
 then
-  fail "Python import failed (pywm/newm). Last log lines:
+  fail "Python import failed. Last log lines:
 $(tail -n 40 "$LOG")
 
 Fix: cd ${REPO} && ./install.sh
-Then: python3 -c 'import newm, pywm; print(\"ok\")'"
+Check: ${VENV_PY} -c 'import newm, pywm; print(\"ok\")'"
 fi
 
-# Run with debug; tee so Ly's session_log and our cache both see output.
 set +e
 "$START" -d "$@" 2>&1 | tee -a "$LOG"
 rc=${PIPESTATUS[0]}
