@@ -103,12 +103,24 @@ install_arch_deps() {
 }
 
 pip_user() {
-  # Prefer pipx-free user installs; break-system-packages for Arch PEP 668 hosts.
-  local pip=(python3 -m pip)
-  if python3 -m pip install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
-    pip+=(--break-system-packages)
+  # SweetPotatOs / older pip: no --break-system-packages.
+  # Newer Arch PEP 668: may require it. Try plain --user first, then retry.
+  local out rc
+  set +e
+  out="$(python3 -m pip install --user "$@" 2>&1)"
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 0 ]]; then
+    printf '%s\n' "$out"
+    return 0
   fi
-  "${pip[@]}" install --user "$@"
+  if printf '%s' "$out" | grep -qE 'externally-managed-environment|break-system-packages'; then
+    info "Retrying pip with --break-system-packages…"
+    python3 -m pip install --user --break-system-packages "$@"
+    return $?
+  fi
+  printf '%s\n' "$out" >&2
+  return "$rc"
 }
 
 ensure_path_hint() {
