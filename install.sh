@@ -254,17 +254,19 @@ install_renewm() {
 
 seed_config() {
   local dest="${HOME}/.config/newm/config.py"
+  mkdir -p "$(dirname "$dest")"
+  local src="${SCRIPT_DIR}/examples/config.sweetpotatos.py"
+  [[ -f "$src" ]] || src="${SCRIPT_DIR}/newm/default_config.py"
   if [[ -f "$dest" ]]; then
-    info "Config already exists: $dest"
+    info "Config already exists: $dest (leave in place)"
+    info "SweetPotatOs example: ${SCRIPT_DIR}/examples/config.sweetpotatos.py"
     return 0
   fi
-  mkdir -p "$(dirname "$dest")"
-  local src="${SCRIPT_DIR}/newm/default_config.py"
   if [[ -f "$src" ]]; then
     cp -f "$src" "$dest"
-    ok "Seeded ${dest} from default_config.py"
+    ok "Seeded ${dest} from $(basename "$src")"
   else
-    warn "No default_config.py found to seed"
+    warn "No example config found to seed"
   fi
 }
 
