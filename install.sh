@@ -103,23 +103,34 @@ install_arch_deps() {
 }
 
 pip_user() {
-  # SweetPotatOs / older pip: no --break-system-packages.
-  # Newer Arch PEP 668: may require it. Try plain --user first, then retry.
+  # Never pass --break-system-packages: SweetPotatOs pip rejects it.
+  # Use --no-build-isolation so system meson/setuptools are visible.
+  # If the distro marks stdlib as externally managed, fall back to a venv.
   local out rc
   set +e
-  out="$(python3 -m pip install --user "$@" 2>&1)"
+  out="$(python3 -m pip install --user --no-build-isolation "$@" 2>&1)"
   rc=$?
   set -e
   if [[ "$rc" -eq 0 ]]; then
     printf '%s\n' "$out"
     return 0
   fi
-  if printf '%s' "$out" | grep -qE 'externally-managed-environment|break-system-packages'; then
-    info "Retrying pip with --break-system-packages…"
-    python3 -m pip install --user --break-system-packages "$@"
-    return $?
-  fi
   printf '%s\n' "$out" >&2
+  if printf '%s' "$out" | grep -qE 'externally-managed-environment|No module named pip'; then
+    local venv="${HOME}/.local/share/renewm-venv"
+    info "PEP 668 / no user site — using venv at ${venv}"
+    if [[ ! -x "${venv}/bin/python" ]]; then
+      python3 -m venv "$venv"
+    fi
+    # shellcheck disable=SC1091
+    source "${venv}/bin/activate"
+    python -m pip install -U pip setuptools wheel
+    python -m pip install --no-build-isolation "$@"
+    # Ensure venv binaries are preferred
+    mkdir -p "$LOCAL_BIN"
+    ln -sfn "${venv}/bin/python" "${LOCAL_BIN}/renewm-python"
+    return 0
+  fi
   return "$rc"
 }
 
@@ -175,28 +186,39 @@ ensure_repywm_submodules() {
   fi
 }
 
-install_pywm() {
-  if [[ -f "${REPYWM_DIR}/setup.py" ]] || [[ -f "${REPYWM_DIR}/pyproject.toml" ]]; then
-    ensure_repywm_submodules "$REPYWM_DIR"
-    info "Installing repywm (editable) from ${REPYWM_DIR}…"
-    # Clean stale meson tree so a failed first build can recover
-    rm -rf "${REPYWM_DIR}/build"
-    info "Building native _pywm.so (this can take a few minutes)…"
-    pip_user -e "${REPYWM_DIR}"
-    if [[ ! -f "${REPYWM_DIR}/pywm/_pywm.so" ]]; then
-      warn "pywm/_pywm.so missing after build — compositor will not start"
-      return 1
-    fi
-    ok "repywm installed from local checkout"
+build_repywm_native() {
+  local dir="$1"
+  info "Building native _pywm.so with system meson (a few minutes)…"
+  if [[ -x "${dir}/build-native.sh" ]]; then
+    bash "${dir}/build-native.sh"
   else
+    rm -rf "${dir}/build"
+    (
+      cd "$dir"
+      meson setup build -Dwlroots:examples=false -Dwlroots:werror=false
+      ninja -C build
+      cp -f build/_pywm*.so pywm/_pywm.so
+    )
+  fi
+  [[ -f "${dir}/pywm/_pywm.so" ]] || {
+    warn "pywm/_pywm.so missing after native build"
+    return 1
+  }
+  ok "Built ${dir}/pywm/_pywm.so"
+}
+
+install_pywm() {
+  if [[ ! -f "${REPYWM_DIR}/setup.py" && ! -f "${REPYWM_DIR}/pyproject.toml" ]]; then
     info "No local repywm at ${REPYWM_DIR} — cloning ${REPYWM_REPO_URL}…"
     mkdir -p "$(dirname "$REPYWM_DIR")"
     git clone --recurse-submodules "$REPYWM_REPO_URL" "$REPYWM_DIR"
-    ensure_repywm_submodules "$REPYWM_DIR"
-    rm -rf "${REPYWM_DIR}/build"
-    pip_user -e "${REPYWM_DIR}"
-    ok "repywm/pywm installed from git checkout"
   fi
+  ensure_repywm_submodules "$REPYWM_DIR"
+  build_repywm_native "$REPYWM_DIR"
+  info "Installing repywm Python package (editable, no build isolation)…"
+  # setup.py skips meson when _pywm.so already exists
+  REPYWM_SKIP_NATIVE=1 pip_user -e "${REPYWM_DIR}"
+  ok "repywm installed from local checkout"
   python3 -c 'import pywm; print("pywm OK", pywm.__file__)' || {
     warn "pywm import failed after install"
     return 1
