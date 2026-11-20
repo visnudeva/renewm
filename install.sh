@@ -109,7 +109,10 @@ install_launchers() {
   info "Installing launchers into ${LOCAL_BIN} and ${SYSTEM_BIN}…"
   mkdir -p "$LOCAL_BIN"
   local f
-  for f in start-newm renewm-session newm-cmd newm-panel-basic .start-newm; do
+  # Do not install hidden .start-newm — it breaks when _pywm is missing and
+  # hides errors; start-newm runs Python directly.
+  rm -f "${LOCAL_BIN}/.start-newm"
+  for f in start-newm renewm-session newm-cmd newm-panel-basic; do
     if [[ -f "${SCRIPT_DIR}/bin/${f}" ]]; then
       install -Dm755 "${SCRIPT_DIR}/bin/${f}" "${LOCAL_BIN}/${f}"
     fi
@@ -151,7 +154,12 @@ install_pywm() {
     info "Installing repywm (editable) from ${REPYWM_DIR}…"
     # Clean stale meson tree so a failed first build can recover
     rm -rf "${REPYWM_DIR}/build"
+    info "Building native _pywm.so (this can take a few minutes)…"
     pip_user -e "${REPYWM_DIR}"
+    if [[ ! -f "${REPYWM_DIR}/pywm/_pywm.so" ]]; then
+      warn "pywm/_pywm.so missing after build — compositor will not start"
+      return 1
+    fi
     ok "repywm installed from local checkout"
   else
     info "No local repywm at ${REPYWM_DIR} — cloning ${REPYWM_REPO_URL}…"
