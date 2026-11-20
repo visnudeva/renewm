@@ -5,7 +5,7 @@
 # Usage:
 #   ./install.sh              # deps + repywm + editable renewm + Ly session
 #   ./install.sh --update     # git pull renewm (+ sibling repywm) + reinstall
-#   ./install.sh --session    # only (re)install the login-session desktop file
+#   ./install.sh --session    # launchers + Ly session desktop (no pip rebuild)
 #   ./install.sh --no-session # skip Ly / wayland-sessions
 set -euo pipefail
 
@@ -16,6 +16,7 @@ PYWM_URL="${RENEWM_PYWM_URL:-git+${REPYWM_REPO_URL}}"
 SESSION_NAME="renewm"
 SESSION_DIR_LY="/etc/ly/wayland-sessions"
 SESSION_DIR_USER="${HOME}/.local/share/wayland-sessions"
+LOCAL_BIN="${HOME}/.local/bin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sibling checkout preferred for editable backend installs
 REPYWM_DIR="${RENEWM_REPYWM_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)/repywm}"
@@ -92,11 +93,29 @@ pip_user() {
 }
 
 ensure_path_hint() {
-  local bin="${HOME}/.local/bin"
-  mkdir -p "$bin"
-  if [[ ":$PATH:" != *":${bin}:"* ]]; then
-    warn "Add ${bin} to PATH (e.g. fish: fish_add_path ${bin})"
+  mkdir -p "$LOCAL_BIN"
+  if [[ ":$PATH:" != *":${LOCAL_BIN}:"* ]]; then
+    warn "Add ${LOCAL_BIN} to PATH (e.g. fish: fish_add_path ${LOCAL_BIN})"
   fi
+}
+
+# Always install launchers from this checkout so Ly does not depend on pip
+# copying hidden scripts (bin/.start-newm is easy to miss).
+install_launchers() {
+  info "Installing launchers into ${LOCAL_BIN}…"
+  mkdir -p "$LOCAL_BIN"
+  local f
+  for f in start-newm renewm-session newm-cmd newm-panel-basic .start-newm; do
+    if [[ -f "${SCRIPT_DIR}/bin/${f}" ]]; then
+      install -Dm755 "${SCRIPT_DIR}/bin/${f}" "${LOCAL_BIN}/${f}"
+    fi
+  done
+  # Stable absolute entry for Ly
+  if [[ ! -x "${LOCAL_BIN}/start-newm" ]]; then
+    warn "start-newm missing after launcher install"
+    return 1
+  fi
+  ok "Launchers: ${LOCAL_BIN}/start-newm , ${LOCAL_BIN}/renewm-session"
 }
 
 install_pywm() {
@@ -116,7 +135,9 @@ install_pywm() {
 install_renewm() {
   info "Installing renewm (editable) from ${SCRIPT_DIR}…"
   pip_user -e "${SCRIPT_DIR}"
-  ok "renewm installed (start-newm / newm-cmd on PATH after ~/.local/bin)"
+  # Re-copy launchers: pip -e may overwrite start-newm with a weaker stub
+  install_launchers
+  ok "renewm package + launchers ready"
 }
 
 seed_config() {
@@ -135,21 +156,15 @@ seed_config() {
   fi
 }
 
-start_newm_path() {
-  # Ly does not use the user shell PATH — prefer an absolute Exec=.
-  if [[ -x "${HOME}/.local/bin/start-newm" ]]; then
-    echo "${HOME}/.local/bin/start-newm"
-  elif command -v start-newm >/dev/null 2>&1; then
-    command -v start-newm
-  else
-    echo "${HOME}/.local/bin/start-newm"
-  fi
+session_exec_path() {
+  # Ly has no user PATH — absolute path to our wrapper.
+  echo "${LOCAL_BIN}/renewm-session"
 }
 
 write_session_desktop() {
   local path="$1"
   local exec_cmd
-  exec_cmd="$(start_newm_path)"
+  exec_cmd="$(session_exec_path)"
   mkdir -p "$(dirname "$path")"
   cat >"$path" <<EOF
 [Desktop Entry]
@@ -163,8 +178,15 @@ EOF
 
 install_session() {
   [[ "$DO_SESSION" -eq 1 ]] || return 0
+  install_launchers
+
   info "Installing Wayland session entry…"
   info "SweetPotatOs Ly only reads ${SESSION_DIR_LY} (not ~/.local/share/wayland-sessions)"
+
+  if [[ ! -x "$(session_exec_path)" ]]; then
+    warn "Missing $(session_exec_path) — cannot register a working Ly session"
+    return 1
+  fi
 
   mkdir -p "$SESSION_DIR_USER"
   write_session_desktop "${SESSION_DIR_USER}/${SESSION_NAME}.desktop"
@@ -181,6 +203,7 @@ install_session() {
     rm -f "$tmp"
     if [[ -f "${SESSION_DIR_LY}/${SESSION_NAME}.desktop" ]]; then
       ok "Ly session: ${SESSION_DIR_LY}/${SESSION_NAME}.desktop"
+      info "Exec=$(grep '^Exec=' "${SESSION_DIR_LY}/${SESSION_NAME}.desktop")"
       info "Sessions Ly will show:"
       ls -1 "$SESSION_DIR_LY" || true
     else
@@ -212,6 +235,7 @@ main() {
   need_cmd git
 
   if [[ "$SESSION_ONLY" -eq 1 ]]; then
+    ensure_path_hint
     install_session
     exit 0
   fi
@@ -219,21 +243,20 @@ main() {
   maybe_pull
   install_arch_deps
   ensure_path_hint
-  # Session entry early so Ly lists renewm even if a later pip/build step fails.
-  install_session || warn "Session install failed — fix sudo, then: ./install.sh --session"
+  install_launchers
   install_pywm
   install_renewm
-  # Refresh Exec= path now that start-newm should exist under ~/.local/bin
-  install_session || true
   seed_config
+  install_session || warn "Session install failed — fix sudo, then: ./install.sh --session"
 
   echo
   ok "Done."
-  echo "  Start from a TTY:  start-newm -d"
-  echo "  Or pick 'renewm' at the login screen (Ly)."
-  echo "  Confirm Ly file:  ls /etc/ly/wayland-sessions"
+  echo "  Check launcher:   ls -l ~/.local/bin/start-newm ~/.local/bin/renewm-session"
+  echo "  Start from a TTY: start-newm -d"
+  echo "  Or pick 'renewm' at Ly (Exec= ~/.local/bin/renewm-session)."
+  echo "  Confirm Ly file:  ls /etc/ly/wayland-sessions && cat /etc/ly/wayland-sessions/renewm.desktop"
   echo "  Log: ~/.cache/newm_log"
-  echo "  Update later:      ./install.sh --update"
+  echo "  Update later:     ./install.sh --update"
 }
 
 main

@@ -1,24 +1,70 @@
 #!/usr/bin/env bash
+# Launch renewm / newm. Does not rely on a sibling ".start-newm" (pip often
+# skips that hidden script), so this works from the repo or ~/.local/bin.
+set -euo pipefail
+
 SOURCE=${BASH_SOURCE[0]}
 while [ -h "$SOURCE" ]; do
-  DIR=$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )
+  DIR=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
   SOURCE=$(readlink "$SOURCE")
   [[ $SOURCE != /* ]] && SOURCE=$DIR/$SOURCE
 done
-DIR=$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )
+DIR=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
 
-
-LOGDIR="$HOME/.cache"
-mkdir -p $LOGDIR || LOGDIR="/tmp"
-
-pushd $LOGDIR
-if [ -e newm_log_bu1 ]
-    then cp newm_log_bu1 newm_log_bu2
+# Resolve the git checkout (pip copies this script to ~/.local/bin).
+REPO_ROOT="${RENEWM_DIR:-}"
+if [[ -z "$REPO_ROOT" && -d "$DIR/../newm" ]]; then
+  REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
 fi
-if [ -e newm_log ]
-    then cp newm_log newm_log_bu1
+if [[ -z "$REPO_ROOT" && -d "${HOME}/code/GITHUB/renewm/newm" ]]; then
+  REPO_ROOT="${HOME}/code/GITHUB/renewm"
 fi
-popd
 
-echo "newm - script dir is $DIR, log dir is $LOGDIR, arguments are $@"
-exec $DIR/.start-newm "$@" > $LOGDIR/newm_log 2>&1
+if [[ -n "$REPO_ROOT" ]]; then
+  export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+  if [[ -d "$REPO_ROOT/../repywm/pywm" ]]; then
+    export PYTHONPATH="$(cd "$REPO_ROOT/../repywm" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+  fi
+fi
+
+LOGDIR="${HOME}/.cache"
+mkdir -p "$LOGDIR" || LOGDIR="/tmp"
+
+if [[ -e "$LOGDIR/newm_log_bu1" ]]; then
+  cp "$LOGDIR/newm_log_bu1" "$LOGDIR/newm_log_bu2"
+fi
+if [[ -e "$LOGDIR/newm_log" ]]; then
+  cp "$LOGDIR/newm_log" "$LOGDIR/newm_log_bu1"
+fi
+
+echo "renewm - script dir=$DIR repo=${REPO_ROOT:-?} log=$LOGDIR args=$*" >>"$LOGDIR/newm_log"
+
+if [[ -x "$DIR/.start-newm" ]]; then
+  exec "$DIR/.start-newm" "$@" >>"$LOGDIR/newm_log" 2>&1
+fi
+if [[ -n "$REPO_ROOT" && -x "$REPO_ROOT/bin/.start-newm" ]]; then
+  exec "$REPO_ROOT/bin/.start-newm" "$@" >>"$LOGDIR/newm_log" 2>&1
+fi
+
+exec python3 - "$@" >>"$LOGDIR/newm_log" 2>&1 <<'PY'
+import argparse
+import sys
+
+try:
+    from newm import run
+except ImportError as e:
+    sys.stderr.write(
+        "renewm: cannot import newm (%s).\n"
+        "Fix: cd ~/code/GITHUB/renewm && ./install.sh\n" % e
+    )
+    sys.exit(127)
+
+parser = argparse.ArgumentParser(prog="start-newm")
+parser.add_argument("-d", "--debug", action="store_true")
+parser.add_argument("-p", "--profile", action="store_true")
+parser.add_argument("-c", "--config-file", type=str, default=None)
+args = parser.parse_args()
+print("renewm python - args are %s" % (sys.argv,), flush=True)
+print(args, flush=True)
+run(args.debug, args.profile, args.config_file)
+PY
