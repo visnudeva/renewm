@@ -73,18 +73,33 @@ install_arch_deps() {
     return 0
   fi
   info "Installing Arch packages…"
-  local pkgs=(
+  # Keep this list to packages that exist in official repos. Pure-Python bits
+  # that are AUR-only (pyfiglet, thefuzz, …) come from pip below — a missing
+  # pacman target used to abort the whole script before building _pywm.so.
+  local want=(
     python wayland libinput libxcb libxkbcommon mesa
     pixman xcb-util-errors xcb-util-renderutil xcb-util-wm seatd xorg-xwayland
     python-evdev python-numpy python-imageio python-cairo python-psutil
-    python-pam python-pyfiglet python-thefuzz python-dasbus
-    meson ninja wayland-protocols xorgproto git polkit
     python-pip python-setuptools python-wheel
+    meson ninja wayland-protocols xorgproto git polkit
   )
-  # Optional but useful defaults
-  command -v alacritty >/dev/null 2>&1 || pkgs+=(alacritty)
-  sudo_run pacman -S --needed --noconfirm "${pkgs[@]}"
-  ok "Arch packages ready"
+  local optional=(python-pam python-dasbus alacritty)
+  local pkgs=()
+  local p
+  for p in "${want[@]}" "${optional[@]}"; do
+    if pacman -Si "$p" >/dev/null 2>&1 || pacman -Q "$p" >/dev/null 2>&1; then
+      pkgs+=("$p")
+    else
+      warn "pacman package not found, skipping: $p"
+    fi
+  done
+  if ((${#pkgs[@]})); then
+    sudo_run pacman -S --needed --noconfirm "${pkgs[@]}"
+  fi
+  info "Installing Python deps via pip (pyfiglet, thefuzz, pam, dasbus, …)…"
+  pip_user -q pyfiglet thefuzz python-pam dasbus pycairo psutil evdev imageio numpy || \
+    pip_user pyfiglet thefuzz python-pam dasbus pycairo psutil
+  ok "System + Python deps ready"
 }
 
 pip_user() {
