@@ -17,6 +17,10 @@ SESSION_NAME="renewm"
 SESSION_DIR_LY="/etc/ly/wayland-sessions"
 SESSION_DIR_USER="${HOME}/.local/share/wayland-sessions"
 LOCAL_BIN="${HOME}/.local/bin"
+# Match SweetPotatOs: Ly's setup.sh exec's the desktop Exec= with a minimal PATH
+# (no ~/.local/bin). Swirl uses /usr/local/bin/sweetpotatos-session — we do the same.
+SYSTEM_BIN="/usr/local/bin"
+SESSION_WRAPPER="${SYSTEM_BIN}/renewm-session"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sibling checkout preferred for editable backend installs
 REPYWM_DIR="${RENEWM_REPYWM_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)/repywm}"
@@ -102,7 +106,7 @@ ensure_path_hint() {
 # Always install launchers from this checkout so Ly does not depend on pip
 # copying hidden scripts (bin/.start-newm is easy to miss).
 install_launchers() {
-  info "Installing launchers into ${LOCAL_BIN}…"
+  info "Installing launchers into ${LOCAL_BIN} and ${SYSTEM_BIN}…"
   mkdir -p "$LOCAL_BIN"
   local f
   for f in start-newm renewm-session newm-cmd newm-panel-basic .start-newm; do
@@ -110,12 +114,20 @@ install_launchers() {
       install -Dm755 "${SCRIPT_DIR}/bin/${f}" "${LOCAL_BIN}/${f}"
     fi
   done
-  # Stable absolute entry for Ly
+  # System wrapper for Ly (same pattern as sweetpotatos-session)
+  if [[ -f "${SCRIPT_DIR}/bin/renewm-session" ]]; then
+    info "Need sudo to install ${SESSION_WRAPPER}…"
+    sudo_run install -Dm755 "${SCRIPT_DIR}/bin/renewm-session" "$SESSION_WRAPPER"
+  fi
   if [[ ! -x "${LOCAL_BIN}/start-newm" ]]; then
     warn "start-newm missing after launcher install"
     return 1
   fi
-  ok "Launchers: ${LOCAL_BIN}/start-newm , ${LOCAL_BIN}/renewm-session"
+  if [[ ! -x "$SESSION_WRAPPER" ]]; then
+    warn "${SESSION_WRAPPER} missing — Ly will not be able to start renewm"
+    return 1
+  fi
+  ok "Launchers: ${LOCAL_BIN}/start-newm , ${SESSION_WRAPPER}"
 }
 
 install_pywm() {
@@ -157,8 +169,8 @@ seed_config() {
 }
 
 session_exec_path() {
-  # Ly has no user PATH — absolute path to our wrapper.
-  echo "${LOCAL_BIN}/renewm-session"
+  # Absolute system path — Ly setup.sh does not include ~/.local/bin.
+  echo "$SESSION_WRAPPER"
 }
 
 write_session_desktop() {
