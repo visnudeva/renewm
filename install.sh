@@ -135,14 +135,27 @@ seed_config() {
   fi
 }
 
+start_newm_path() {
+  # Ly does not use the user shell PATH — prefer an absolute Exec=.
+  if [[ -x "${HOME}/.local/bin/start-newm" ]]; then
+    echo "${HOME}/.local/bin/start-newm"
+  elif command -v start-newm >/dev/null 2>&1; then
+    command -v start-newm
+  else
+    echo "${HOME}/.local/bin/start-newm"
+  fi
+}
+
 write_session_desktop() {
   local path="$1"
+  local exec_cmd
+  exec_cmd="$(start_newm_path)"
   mkdir -p "$(dirname "$path")"
-  cat >"$path" <<'EOF'
+  cat >"$path" <<EOF
 [Desktop Entry]
 Name=renewm
 Comment=renewm (newm fork) — testing
-Exec=start-newm
+Exec=${exec_cmd}
 Type=Application
 DesktopNames=newm;wlroots
 EOF
@@ -151,20 +164,32 @@ EOF
 install_session() {
   [[ "$DO_SESSION" -eq 1 ]] || return 0
   info "Installing Wayland session entry…"
+  info "SweetPotatOs Ly only reads ${SESSION_DIR_LY} (not ~/.local/share/wayland-sessions)"
+
   mkdir -p "$SESSION_DIR_USER"
   write_session_desktop "${SESSION_DIR_USER}/${SESSION_NAME}.desktop"
-  ok "User session: ${SESSION_DIR_USER}/${SESSION_NAME}.desktop"
+  ok "User copy: ${SESSION_DIR_USER}/${SESSION_NAME}.desktop"
 
-  if [[ -d /etc/ly ]] || [[ -d "$SESSION_DIR_LY" ]]; then
+  # Always try the Ly curated dir when /etc/ly exists (SPO sets waylandsessions there).
+  if [[ -d /etc/ly ]] || [[ -d "$SESSION_DIR_LY" ]] || grep -qs 'waylandsessions.*/etc/ly' /etc/ly/config.ini 2>/dev/null; then
+    info "Need sudo to install into ${SESSION_DIR_LY}…"
     sudo_run mkdir -p "$SESSION_DIR_LY"
     local tmp
     tmp="$(mktemp)"
     write_session_desktop "$tmp"
     sudo_run install -Dm644 "$tmp" "${SESSION_DIR_LY}/${SESSION_NAME}.desktop"
     rm -f "$tmp"
-    ok "Ly session: ${SESSION_DIR_LY}/${SESSION_NAME}.desktop (pick renewm at login)"
+    if [[ -f "${SESSION_DIR_LY}/${SESSION_NAME}.desktop" ]]; then
+      ok "Ly session: ${SESSION_DIR_LY}/${SESSION_NAME}.desktop"
+      info "Sessions Ly will show:"
+      ls -1 "$SESSION_DIR_LY" || true
+    else
+      warn "Failed to write ${SESSION_DIR_LY}/${SESSION_NAME}.desktop — renewm will not appear in Ly"
+      return 1
+    fi
   else
-    warn "Ly not detected — only installed user session under ~/.local/share/wayland-sessions"
+    warn "Ly not detected — only installed under ~/.local/share/wayland-sessions"
+    warn "If you use Ly later, re-run: ./install.sh --session"
   fi
 }
 
@@ -194,15 +219,19 @@ main() {
   maybe_pull
   install_arch_deps
   ensure_path_hint
+  # Session entry early so Ly lists renewm even if a later pip/build step fails.
+  install_session || warn "Session install failed — fix sudo, then: ./install.sh --session"
   install_pywm
   install_renewm
+  # Refresh Exec= path now that start-newm should exist under ~/.local/bin
+  install_session || true
   seed_config
-  install_session
 
   echo
   ok "Done."
   echo "  Start from a TTY:  start-newm -d"
   echo "  Or pick 'renewm' at the login screen (Ly)."
+  echo "  Confirm Ly file:  ls /etc/ly/wayland-sessions"
   echo "  Log: ~/.cache/newm_log"
   echo "  Update later:      ./install.sh --update"
 }
