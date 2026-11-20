@@ -3,18 +3,22 @@
 # Safe beside another Wayland session (e.g. Swirl on SweetPotatOs).
 #
 # Usage:
-#   ./install.sh              # deps + pywm + editable renewm + Ly session
-#   ./install.sh --update     # git pull (if in a clone) + reinstall packages
+#   ./install.sh              # deps + repywm + editable renewm + Ly session
+#   ./install.sh --update     # git pull renewm (+ sibling repywm) + reinstall
 #   ./install.sh --session    # only (re)install the login-session desktop file
 #   ./install.sh --no-session # skip Ly / wayland-sessions
 set -euo pipefail
 
 REPO_URL="${RENEWM_REPO_URL:-https://github.com/visnudeva/renewm.git}"
-PYWM_URL="${RENEWM_PYWM_URL:-git+https://github.com/jbuchermn/pywm}"
+# Backend fork (still imports as Python package "pywm")
+REPYWM_REPO_URL="${RENEWM_REPYWM_URL:-https://github.com/visnudeva/repywm.git}"
+PYWM_URL="${RENEWM_PYWM_URL:-git+${REPYWM_REPO_URL}}"
 SESSION_NAME="renewm"
 SESSION_DIR_LY="/etc/ly/wayland-sessions"
 SESSION_DIR_USER="${HOME}/.local/share/wayland-sessions"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Sibling checkout preferred for editable backend installs
+REPYWM_DIR="${RENEWM_REPYWM_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)/repywm}"
 
 DO_UPDATE=0
 DO_SESSION=1
@@ -96,9 +100,17 @@ ensure_path_hint() {
 }
 
 install_pywm() {
-  info "Installing pywm…"
-  pip_user "$PYWM_URL"
-  ok "pywm installed"
+  if [[ -f "${REPYWM_DIR}/setup.py" ]] || [[ -f "${REPYWM_DIR}/pyproject.toml" ]]; then
+    info "Installing repywm (editable) from ${REPYWM_DIR}…"
+    pip_user -e "${REPYWM_DIR}"
+    ok "repywm installed from local checkout"
+  else
+    info "No local repywm at ${REPYWM_DIR} — pip from ${PYWM_URL}"
+    info "Clone it next to renewm for editable backend work:"
+    info "  git clone ${REPYWM_REPO_URL} ${REPYWM_DIR}"
+    pip_user "$PYWM_URL"
+    ok "repywm/pywm installed from git"
+  fi
 }
 
 install_renewm() {
@@ -163,6 +175,10 @@ maybe_pull() {
     git -C "$SCRIPT_DIR" pull --ff-only
   else
     warn "Not a git checkout; skip pull. Clone from ${REPO_URL}"
+  fi
+  if [[ -d "${REPYWM_DIR}/.git" ]]; then
+    info "git pull in ${REPYWM_DIR}…"
+    git -C "$REPYWM_DIR" pull --ff-only
   fi
 }
 

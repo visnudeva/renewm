@@ -4,12 +4,14 @@ Fork of [newm](https://github.com/jbuchermn/newm) for local experimentation. Ups
 
 **renewm** is a Wayland compositor aimed at laptops and touchpads: windows live on a large 2D wall of tiles, and you navigate / zoom that wall (three-finger pan, four-finger zoom, `Logo` overview, etc.) instead of only tiling inside the panel.
 
+Backend: **[repywm](https://github.com/visnudeva/repywm)** (fork of [pywm](https://github.com/jbuchermn/pywm)). Layout stays in Python here; rendering/input seat work lives in that C + wlroots repo. Both are ours to update and bugfix.
+
 ## Is it light?
 
 Mostly yes for a test session.
 
-- **Python** drives layout, gestures, config, and panels — idle RAM is higher than a pure C compositor (Swirl / Hyprland / Sway).
-- **Rendering, input, and compositing** go through [pywm](https://github.com/jbuchermn/pywm) (C + wlroots), so the hot path is native, not interpreted Python frame-by-frame.
+- **Python (renewm)** drives layout, gestures, config, and panels — idle RAM is higher than a pure C compositor (Swirl / Hyprland / Sway).
+- **repywm** (C + wlroots) handles the hot path — not interpreted Python frame-by-frame.
 
 Expect something heavier than Swirl at idle, but far lighter than an Electron desktop. Fine as a **second session** on a SweetPotatOs laptop; keep Swirl as daily driver.
 
@@ -17,28 +19,32 @@ Expect something heavier than Swirl at idle, but far lighter than an Electron de
 
 | Machine | Role |
 | --- | --- |
-| **Ryoku** | Edit this repo, commit, `git push` |
-| **SweetPotatOs laptop** | Clone / pull, run `./install.sh`, pick **renewm** at Ly |
+| **Ryoku** | Edit `renewm` and/or `repywm`, commit, `git push` |
+| **SweetPotatOs laptop** | Clone / pull both, run `./install.sh`, pick **renewm** at Ly |
 
 ```sh
-# Ryoku
-cd ~/code/GITHUB/renewm
+# Ryoku — compositor and/or backend
+cd ~/code/GITHUB/renewm   # and/or ../repywm
 git add -A && git commit -m "…" && git push
 
-# SweetPotatOs
-cd ~/code/GITHUB/renewm   # or clone first
-./install.sh --update
+# SweetPotatOs (clone both once, side by side)
+mkdir -p ~/code/GITHUB && cd ~/code/GITHUB
+git clone https://github.com/visnudeva/renewm.git
+git clone https://github.com/visnudeva/repywm.git
+cd renewm && ./install.sh --update
 ```
 
 Then log out and select **renewm** (Swirl stays available).
 
 ## Install
 
-On Arch / SweetPotatOs, from a checkout:
+On Arch / SweetPotatOs, from a checkout (with `repywm` next to it when you want editable backend installs):
 
 ```sh
-git clone https://github.com/visnudeva/renewm.git ~/code/GITHUB/renewm
-cd ~/code/GITHUB/renewm
+mkdir -p ~/code/GITHUB && cd ~/code/GITHUB
+git clone https://github.com/visnudeva/renewm.git
+git clone https://github.com/visnudeva/repywm.git
+cd renewm
 chmod +x install.sh
 ./install.sh
 ```
@@ -46,14 +52,15 @@ chmod +x install.sh
 What the script does:
 
 1. Installs pacman deps (skipped on non-Arch)
-2. `pip install --user` [pywm](https://github.com/jbuchermn/pywm) + this repo editable (`-e`)
-3. Seeds `~/.config/newm/config.py` once from `newm/default_config.py`
-4. Adds a **renewm** Wayland session under `~/.local/share/wayland-sessions` and, if Ly is present, `/etc/ly/wayland-sessions`
+2. `pip install --user -e` **repywm** from `../repywm` if present, else from GitHub
+3. `pip install --user -e` this repo
+4. Seeds `~/.config/newm/config.py` once from `newm/default_config.py`
+5. Adds a **renewm** Wayland session under `~/.local/share/wayland-sessions` and, if Ly is present, `/etc/ly/wayland-sessions`
 
 Options:
 
 ```sh
-./install.sh --update      # git pull --ff-only, then reinstall
+./install.sh --update      # git pull renewm + sibling repywm, then reinstall
 ./install.sh --session     # only refresh the .desktop session file
 ./install.sh --no-session  # packages only, no Ly entry
 ```
@@ -63,7 +70,7 @@ Ensure `~/.local/bin` is on `PATH` so `start-newm` resolves.
 Manual / non-Arch path:
 
 ```sh
-pip3 install --user git+https://github.com/jbuchermn/pywm
+pip3 install --user -e ../repywm   # or: git+https://github.com/visnudeva/repywm
 pip3 install --user -e .
 ```
 
