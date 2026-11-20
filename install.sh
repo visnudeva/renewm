@@ -130,18 +130,42 @@ install_launchers() {
   ok "Launchers: ${LOCAL_BIN}/start-newm , ${SESSION_WRAPPER}"
 }
 
+ensure_repywm_submodules() {
+  local dir="$1"
+  [[ -d "${dir}/.git" || -f "${dir}/.git" ]] || return 0
+  if [[ -f "${dir}/.gitmodules" ]]; then
+    info "Initializing repywm submodules (wlroots) in ${dir}…"
+    git -C "$dir" submodule sync --recursive
+    git -C "$dir" submodule update --init --recursive
+  fi
+  if [[ ! -f "${dir}/subprojects/wlroots/meson.build" ]]; then
+    warn "wlroots submodule missing under ${dir}/subprojects/wlroots"
+    warn "Run: git -C ${dir} submodule update --init --recursive"
+    return 1
+  fi
+}
+
 install_pywm() {
   if [[ -f "${REPYWM_DIR}/setup.py" ]] || [[ -f "${REPYWM_DIR}/pyproject.toml" ]]; then
+    ensure_repywm_submodules "$REPYWM_DIR"
     info "Installing repywm (editable) from ${REPYWM_DIR}…"
+    # Clean stale meson tree so a failed first build can recover
+    rm -rf "${REPYWM_DIR}/build"
     pip_user -e "${REPYWM_DIR}"
     ok "repywm installed from local checkout"
   else
-    info "No local repywm at ${REPYWM_DIR} — pip from ${PYWM_URL}"
-    info "Clone it next to renewm for editable backend work:"
-    info "  git clone ${REPYWM_REPO_URL} ${REPYWM_DIR}"
-    pip_user "$PYWM_URL"
-    ok "repywm/pywm installed from git"
+    info "No local repywm at ${REPYWM_DIR} — cloning ${REPYWM_REPO_URL}…"
+    mkdir -p "$(dirname "$REPYWM_DIR")"
+    git clone --recurse-submodules "$REPYWM_REPO_URL" "$REPYWM_DIR"
+    ensure_repywm_submodules "$REPYWM_DIR"
+    rm -rf "${REPYWM_DIR}/build"
+    pip_user -e "${REPYWM_DIR}"
+    ok "repywm/pywm installed from git checkout"
   fi
+  python3 -c 'import pywm; print("pywm OK", pywm.__file__)' || {
+    warn "pywm import failed after install"
+    return 1
+  }
 }
 
 install_renewm() {
@@ -149,6 +173,10 @@ install_renewm() {
   pip_user -e "${SCRIPT_DIR}"
   # Re-copy launchers: pip -e may overwrite start-newm with a weaker stub
   install_launchers
+  python3 -c 'import newm, pywm; print("renewm+pywm OK")' || {
+    warn "newm/pywm import check failed"
+    return 1
+  }
   ok "renewm package + launchers ready"
 }
 
@@ -239,6 +267,7 @@ maybe_pull() {
   if [[ -d "${REPYWM_DIR}/.git" ]]; then
     info "git pull in ${REPYWM_DIR}…"
     git -C "$REPYWM_DIR" pull --ff-only
+    ensure_repywm_submodules "$REPYWM_DIR" || true
   fi
 }
 
