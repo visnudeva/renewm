@@ -47,6 +47,12 @@ def _term() -> str:
 
 
 TERM = _term()
+VENV_BIN = HOME / ".local/share/renewm-venv/bin"
+PANEL_BIN = (
+    str(VENV_BIN / "newm-panel-basic")
+    if (VENV_BIN / "newm-panel-basic").is_file()
+    else "newm-panel-basic"
+)
 
 background = {
     "path": _wallpaper(),
@@ -150,9 +156,9 @@ def key_bindings(layout: Layout) -> list[tuple[str, Callable[[], Any]]]:
         ("L-C-j", lambda: layout.resize_focused_view(0, 1)),
         ("L-C-k", lambda: layout.resize_focused_view(0, -1)),
         ("L-C-l", lambda: layout.resize_focused_view(1, 0)),
-        # Apps
+        # Apps — Mod+Space slides in the newm launcher panel (figlet + fuzzy search)
         ("L-Return", lambda: _run(TERM)),
-        ("L-space", lambda: _run(f"{TERM} -e newm-panel-basic launcher")),
+        ("L-space", lambda: layout.enter_launcher_overlay()),
         ("L-q", lambda: layout.close_focused_view()),
         ("L-f", lambda: layout.toggle_fullscreen()),
         ("L-", lambda: layout.toggle_overview()),
@@ -181,10 +187,14 @@ def _battery() -> str:
 
 panels = {
     "lock": {
-        "cmd": f"{TERM} -e newm-panel-basic lock",
+        "cmd": f"{TERM} -e {PANEL_BIN} lock",
     },
     "launcher": {
-        "cmd": f"{TERM} -e newm-panel-basic launcher",
+        # Slides in with Mod+Space or a 5-finger swipe (newm spirit)
+        "cmd": f"{TERM} -e {PANEL_BIN} launcher",
+        "w": 0.7,
+        "h": 0.75,
+        "corner_radius": 18,
     },
     "top_bar": {
         "native": {

@@ -253,20 +253,21 @@ install_renewm() {
 }
 
 seed_config() {
-  local dest="${HOME}/.config/newm/config.py"
-  mkdir -p "$(dirname "$dest")"
-  local src="${SCRIPT_DIR}/examples/config.sweetpotatos.py"
-  [[ -f "$src" ]] || src="${SCRIPT_DIR}/newm/default_config.py"
-  if [[ -f "$dest" ]]; then
-    info "Config already exists: $dest (leave in place)"
-    info "SweetPotatOs example: ${SCRIPT_DIR}/examples/config.sweetpotatos.py"
-    return 0
+  local dest_dir="${HOME}/.config/newm"
+  mkdir -p "$dest_dir"
+  local cfg_src="${SCRIPT_DIR}/examples/config.sweetpotatos.py"
+  [[ -f "$cfg_src" ]] || cfg_src="${SCRIPT_DIR}/newm/default_config.py"
+  if [[ -f "${dest_dir}/config.py" ]]; then
+    info "Config already exists: ${dest_dir}/config.py"
+    info "Update from example: cp ${SCRIPT_DIR}/examples/config.sweetpotatos.py ~/.config/newm/config.py"
+  elif [[ -f "$cfg_src" ]]; then
+    cp -f "$cfg_src" "${dest_dir}/config.py"
+    ok "Seeded ${dest_dir}/config.py"
   fi
-  if [[ -f "$src" ]]; then
-    cp -f "$src" "$dest"
-    ok "Seeded ${dest} from $(basename "$src")"
-  else
-    warn "No example config found to seed"
+  # launcher.py is optional — panel auto-discovers .desktop files without it
+  if [[ ! -f "${dest_dir}/launcher.py" && -f "${SCRIPT_DIR}/examples/launcher.sweetpotatos.py" ]]; then
+    cp -f "${SCRIPT_DIR}/examples/launcher.sweetpotatos.py" "${dest_dir}/launcher.py"
+    ok "Seeded ${dest_dir}/launcher.py (shortcuts; apps still auto-discovered)"
   fi
 }
 
